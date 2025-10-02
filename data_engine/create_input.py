@@ -54,7 +54,7 @@ def camera_list(
         Rotations: "turn_left", "turn_right", "tilt_up", "tilt_down",
                  "360_rotation_left", "360_rotation_right"
         Combined: "forward_left", "forward_right", "orbit_left", "orbit_right", 
-                 "dolly_zoom", "spiral_up", "spiral_down", "arc_left", "arc_right"
+                 "dolly_zoom_in", "dolly_zoom_out", "spiral_up", "spiral_down", "arc_left", "arc_right"
         Advanced: "figure_eight", "sine_wave", "custom"
     """
     
@@ -63,7 +63,7 @@ def camera_list(
         "forward", "backward", "left", "right", "up", "down", "turn_left", "turn_right", 
         "tilt_up", "tilt_down", "360_rotation_left", "360_rotation_right", 
         "forward_left", "forward_right", "forward_turn_left", "forward_turn_right", "orbit_left", 
-        "orbit_right", "dolly_zoom", "spiral_up", "spiral_down", "arc_left", "arc_right", 
+        "orbit_right", "dolly_zoom_in", "dolly_zoom_out", "spiral_up", "spiral_down", "arc_left", "arc_right", 
         "figure_eight", "sine_wave", "custom"
     ]
     
