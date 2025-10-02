@@ -393,7 +393,7 @@ def create_video_demo():
                         
                         # Advanced movements
                         "orbit_left", "orbit_right",
-                        "dolly_zoom",  # Classic Vertigo effect
+                        "dolly_zoom_in", "dolly_zoom_out",  # Classic Vertigo effect
                         "spiral_up", "spiral_down",
                         "arc_left", "arc_right",
                         
