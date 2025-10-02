@@ -323,14 +323,15 @@ Download pretrained models from huggingface, & take all of the models & place th
 huggingface-cli download tencent/HunyuanWorld-Voyager --local-dir ./ckpts
 ```
 
-The `ckpts` folder should look exactly like this - A detailed guidance for downloading pretrained models is shown [here](ckpts/README.md).
+The `ckpts` folder should look exactly like this - A detailed guidance for downloading pretrained models is shown [here](ckpts/README_guide.md).
 
 ```
 Windows-HunyuanWorld-Voyager/ckpts/
 ├── .gitattributes
 ├── LICENSE
 ├── NOTICE
-├── README_model.md      # can be renamed or removed
+├── README.md
+├── README_guide.md
 ├── Voyager
 │   ├── config.json
 │   └── transformers
