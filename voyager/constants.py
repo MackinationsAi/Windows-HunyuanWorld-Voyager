@@ -108,26 +108,27 @@ NORMALIZATION_TYPE = {"layer", "rms"}
 ACTIVATION_TYPE = {"relu", "silu", "gelu", "gelu_tanh"}
 
 # =================== Model Path =====================
-MODEL_BASE = os.getenv("MODEL_BASE", "/root/ckpts")
+# Use Windows-compatible path with environment variable override
+MODEL_BASE = os.getenv("MODEL_BASE", os.path.abspath("ckpts"))
 
 # =================== Data =======================
 DATA_TYPE = {"image", "video", "image_video"}
 
-# 3D VAE
-VAE_PATH = {"884-16c-hy": f"{MODEL_BASE}/hunyuan-video-i2v-720p/vae"}
+# 3D VAE - Use Windows path format
+VAE_PATH = {"884-16c-hy": os.path.join(MODEL_BASE, "hunyuan-video-i2v-720p", "vae")}
 
-# Text Encoder
+# Text Encoder - Use Windows path format
 TEXT_ENCODER_PATH = {
-    "clipL": f"{MODEL_BASE}/text_encoder_2",
-    "llm": f"{MODEL_BASE}/text_encoder",
-    "llm-i2v": f"{MODEL_BASE}/text_encoder_i2v",
+    "clipL": os.path.join(MODEL_BASE, "text_encoder_2"),
+    "llm": os.path.join(MODEL_BASE, "text_encoder"),
+    "llm-i2v": os.path.join(MODEL_BASE, "text_encoder_i2v"),
 }
 
-# Tokenizer
+# Tokenizer - Use Windows path format
 TOKENIZER_PATH = {
-    "clipL": f"{MODEL_BASE}/text_encoder_2",
-    "llm": f"{MODEL_BASE}/text_encoder",
-    "llm-i2v": f"{MODEL_BASE}/text_encoder_i2v",
+    "clipL": os.path.join(MODEL_BASE, "text_encoder_2"),
+    "llm": os.path.join(MODEL_BASE, "text_encoder"),
+    "llm-i2v": os.path.join(MODEL_BASE, "text_encoder_i2v"),
 }
 
 TEXT_PROJECTION = {
@@ -166,6 +167,7 @@ FLOW_SOLVER = {
     "euler",                # Euler solver
 }
 
+# DIT Weight Path - Use Windows path format
 DIT_WEIGHT_PATH = {
-    "voyager": f"{MODEL_BASE}/Voyager/transformers/mp_rank_00_model_states.pt",
+    "voyager": os.path.join(MODEL_BASE, "Voyager", "transformers", "mp_rank_00_model_states.pt"),
 }
