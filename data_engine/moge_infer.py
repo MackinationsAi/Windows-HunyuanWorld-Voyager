@@ -8,6 +8,7 @@ from typing import *
 import itertools
 import cv2
 import torch
+import numpy as np
 
 
 original_cwd = os.getcwd()
@@ -34,9 +35,9 @@ def main(image_dir, output_dir):
     image_paths = sorted(itertools.chain(*(Path(image_dir).rglob(f'*.{suffix}') for suffix in include_suffices)))
 
 
-    # 检查输出目录中已有的EXR文件数量
-    output_exr_files = list(Path(output_dir).glob('*.exr'))
-    if len(output_exr_files) >= len(image_paths):
+    # Check for existing NPY files in output directory
+    output_npy_files = list(Path(output_dir).glob('*.npy'))
+    if len(output_npy_files) >= len(image_paths):
         return
 
     for image_path in image_paths:
@@ -47,17 +48,17 @@ def main(image_dir, output_dir):
         output = model.infer(image_tensor, fov_x=None, resolution_level=9, num_tokens=None, use_fp16=True)
         depth = output['depth'].cpu().numpy()
 
-        exr_output_dir = Path(output_dir)
-        exr_output_dir.mkdir(exist_ok=True, parents=True)
+        npy_output_dir = Path(output_dir)
+        npy_output_dir.mkdir(exist_ok=True, parents=True)
 
-        # 构造文件名（直接使用 image_path 的 stem）
-        filename = f"{image_path.stem}.exr"
+        # Construct filename using image_path stem
+        filename = f"{image_path.stem}.npy"
         
-        # 路径拼接（不使用 / 符号）
-        save_file = exr_output_dir.joinpath(filename)  
+        # Path joining
+        save_file = npy_output_dir.joinpath(filename)  
         
-        # 保存深度图
-        cv2.imwrite(str(save_file), depth, [cv2.IMWRITE_EXR_TYPE, cv2.IMWRITE_EXR_TYPE_FLOAT])
+        # Save depth map as NPY
+        np.save(str(save_file), depth)
 
 
 if __name__ == "__main__":
@@ -67,7 +68,3 @@ if __name__ == "__main__":
     parser.add_argument('--output_dir', type=str, required=True, help='Path to output directory')
     args = parser.parse_args()
     main(args.image_dir, args.output_dir)
-
-
-       
-
