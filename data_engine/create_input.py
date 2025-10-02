@@ -5,7 +5,6 @@ import argparse
 import os
 import json
 import imageio
-import pyexr
 import cv2
 
 try:
@@ -29,62 +28,307 @@ def camera_list(
     Width=512,
     Height=512,
     fx=256,
-    fy=256
+    fy=256,
+    movement_speed=1.0,
+    rotation_speed=1.0,
+    arc_height=0.0,
+    zoom_factor=1.0,
+    custom_params=None
 ):
-    assert type in ["forward", "backward", "left", "right", "turn_left", "turn_right"], "Invalid camera type"
-
-    start_pos = np.array([0, 0, 0])
-    end_pos = np.array([0, 0, 0])
-    if type == "forward":
-        end_pos = np.array([0, 0, 1])
-    elif type == "backward":
-        end_pos = np.array([0, 0, -1])
-    elif type == "left":
-        end_pos = np.array([-1, 0, 0])
-    elif type == "right":
-        end_pos = np.array([1, 0, 0])
-
+    """
+    Advanced camera trajectory generation with support for combined movements.
+    
+    Args:
+        num_frames: Number of frames in the trajectory
+        type: Movement type or combination
+        Width, Height: Image dimensions
+        fx, fy: Focal lengths
+        movement_speed: Speed of translational movement (0.0 to 3.0)
+        rotation_speed: Speed of rotational movement (0.0 to 3.0)
+        arc_height: Height of arc for curved movements (0.0 to 2.0)
+        zoom_factor: Zoom effect intensity (0.5 to 2.0)
+        custom_params: Dict with custom trajectory parameters
+    
+    Supported types:
+        Basic: "forward", "backward", "left", "right", "up", "down"
+        Rotations: "turn_left", "turn_right", "tilt_up", "tilt_down",
+                 "360_rotation_left", "360_rotation_right"
+        Combined: "forward_left", "forward_right", "orbit_left", "orbit_right", 
+                 "dolly_zoom", "spiral_up", "spiral_down", "arc_left", "arc_right"
+        Advanced: "figure_eight", "sine_wave", "custom"
+    """
+    
+    # Validate inputs
+    valid_types = [
+        "forward", "backward", "left", "right", "up", "down", "turn_left", "turn_right", 
+        "tilt_up", "tilt_down", "360_rotation_left", "360_rotation_right", 
+        "forward_left", "forward_right", "forward_turn_left", "forward_turn_right", "orbit_left", 
+        "orbit_right", "dolly_zoom", "spiral_up", "spiral_down", "arc_left", "arc_right", 
+        "figure_eight", "sine_wave", "custom"
+    ]
+    
+    if type not in valid_types:
+        raise ValueError(f"Invalid camera type. Must be one of: {valid_types}")
+    
+    # Setup intrinsics
     cx = Width // 2
     cy = Height // 2
-
     intrinsic = np.array([
         [fx, 0, cx],
         [0, fy, cy],
         [0, 0, 1]
     ])
     intrinsics = np.stack([intrinsic] * num_frames)
-
-    # Interpolate camera positions along a straight line
-    camera_centers = np.linspace(start_pos, end_pos, num_frames)
-    target_start = np.array([0, 0, 100])  # Target point
-    if type == "turn_left":
-        target_end = np.array([-100, 0, 0])
-    elif type == "turn_right":
-        target_end = np.array([100, 0, 0])
-    else:
-        target_end = np.array([0, 0, 100])
-    target_points = np.linspace(target_start, target_end, num_frames * 2)[:num_frames]
-
-    extrinsics = []
-    for t, target_point in zip(camera_centers, target_points):
-        if type == "left" or type == "right":
-            target_point = t + target_point
+    
+    # Time parameter for smooth interpolation
+    t = np.linspace(0, 1, num_frames)
+    
+    # Initialize positions and orientations
+    positions = np.zeros((num_frames, 3))
+    look_at_points = np.zeros((num_frames, 3))
+    up_vectors = np.tile([0, 1, 0], (num_frames, 1))
+    
+    # Generate trajectories based on type
+    if type == "forward":
+        positions[:, 2] = t * movement_speed
+        look_at_points[:, 2] = positions[:, 2] + 1
         
-        z = (target_point - t)
-        z = z / np.linalg.norm(z)
-        x = np.array([1, 0, 0])
-        y = np.cross(z, x)
-        y = y / np.linalg.norm(y)
-        x = np.cross(y, z)
+    elif type == "backward":
+        positions[:, 2] = -t * movement_speed
+        look_at_points[:, 2] = positions[:, 2] - 1
+        
+    elif type == "left":
+        positions[:, 0] = -t * movement_speed
+        look_at_points[:, 2] = 1
+        
+    elif type == "right":
+        positions[:, 0] = t * movement_speed
+        look_at_points[:, 2] = 1
+        
+    elif type == "up":
+        positions[:, 1] = t * movement_speed
+        look_at_points[:, 2] = 1
+        
+    elif type == "down":
+        positions[:, 1] = -t * movement_speed
+        look_at_points[:, 2] = 1
+        
+    elif type == "turn_left":
+        # Pure rotation around Y axis
+        angles = t * np.pi * (rotation_speed * 0.75)
+        look_at_points[:, 0] = -np.sin(angles)
+        look_at_points[:, 2] = np.cos(angles)
+        
+    elif type == "turn_right":
+        angles = t * np.pi * (rotation_speed * 0.75)
+        look_at_points[:, 0] = np.sin(angles)
+        look_at_points[:, 2] = np.cos(angles)
 
+    elif type == "tilt_up":
+        angles = t * np.pi * 0.25 * (rotation_speed * 0.5)
+        look_at_points[:, 1] = -np.sin(angles)
+        look_at_points[:, 2] = np.cos(angles)
+
+    elif type == "tilt_down":
+        angles = t * np.pi * 0.25 * (rotation_speed * 0.5)
+        look_at_points[:, 1] = np.sin(angles)
+        look_at_points[:, 2] = np.cos(angles)
+
+    elif type == "360_rotation_left":
+        # Camera spins counterclockwise while moving forward
+        positions[:, 2] = t * movement_speed * 0.5  # Move forward slowly
+        # Rotate the look-at direction around the camera position
+        angles = t * 2 * np.pi * (rotation_speed * 0.5)  # Full 360 degree spin
+        look_at_points[:, 0] = positions[:, 0] - np.sin(angles)
+        look_at_points[:, 2] = positions[:, 2] + np.cos(angles)
+        # Keep up vector normal
+        up_vectors[:, :] = [0, 1, 0]
+        
+    elif type == "360_rotation_right":
+        # Camera spins clockwise while moving forward
+        positions[:, 2] = t * movement_speed * 0.5  # Move forward slowly
+        # Rotate the look-at direction around the camera position
+        angles = t * 2 * np.pi * (rotation_speed * 0.5)  # Full 360 degree spin
+        look_at_points[:, 0] = positions[:, 0] + np.sin(angles)
+        look_at_points[:, 2] = positions[:, 2] + np.cos(angles)
+        # Keep up vector normal
+        up_vectors[:, :] = [0, 1, 0]
+
+    elif type == "forward_left":
+        # Forward movement with leftward drift
+        positions[:, 2] = t * movement_speed
+        positions[:, 0] = -t * movement_speed
+        look_at_points[:, 2] = positions[:, 2] + 2
+        look_at_points[:, 0] = positions[:, 0]
+        
+    elif type == "forward_right":
+        positions[:, 2] = t * movement_speed
+        positions[:, 0] = t * movement_speed
+        look_at_points[:, 2] = positions[:, 2] + 2
+        look_at_points[:, 0] = positions[:, 0]
+        
+    elif type == "forward_turn_left":
+        positions[:, 2] = t * movement_speed
+        angles = t * np.pi * 0.5 * rotation_speed  # 90 degree turn over sequence
+        look_at_points[:, 0] = positions[:, 0] - np.sin(angles)
+        look_at_points[:, 2] = positions[:, 2] + np.cos(angles)
+        
+    elif type == "forward_turn_right":
+        positions[:, 2] = t * movement_speed
+        angles = t * np.pi * 0.5 * rotation_speed
+        look_at_points[:, 0] = positions[:, 0] + np.sin(angles)
+        look_at_points[:, 2] = positions[:, 2] + np.cos(angles)
+        
+    elif type == "orbit_left":
+        radius = 2.0 * movement_speed
+        angles = t * 2 * np.pi * rotation_speed
+        positions[:, 0] = radius * np.cos(angles)
+        positions[:, 2] = radius * np.sin(angles)
+        look_at_points[:, :] = [0, 0, 0]  # Always look at center
+        
+    elif type == "orbit_right":
+        radius = 2.0 * movement_speed
+        angles = -t * 2 * np.pi * rotation_speed
+        positions[:, 0] = radius * np.cos(angles)
+        positions[:, 2] = radius * np.sin(angles)
+        look_at_points[:, :] = [0, 0, 0]
+        
+    elif type == "dolly_zoom_in":
+        positions[:, 2] = t * movement_speed * 2
+        look_at_points[:, 2] = 1
+        
+    elif type == "dolly_zoom_out":
+        positions[:, 2] = -t * movement_speed * 2
+        look_at_points[:, 2] = 1
+        
+    elif type == "spiral_up":
+        radius = 2.0 * movement_speed
+        angles = t * 4 * np.pi * rotation_speed
+        positions[:, 0] = radius * np.cos(angles) * (1 - t * 0.5)
+        positions[:, 2] = radius * np.sin(angles) * (1 - t * 0.5)
+        positions[:, 1] = t * movement_speed * 2
+        look_at_points[:, :] = [0, 0, 0]
+        
+    elif type == "spiral_down":
+        radius = 2.0 * movement_speed
+        angles = t * 4 * np.pi * rotation_speed
+        positions[:, 0] = radius * np.cos(angles) * (1 - t * 0.5)
+        positions[:, 2] = radius * np.sin(angles) * (1 - t * 0.5)
+        positions[:, 1] = -t * movement_speed * 2
+        look_at_points[:, :] = [0, 0, 0]
+        
+    elif type == "arc_left":
+        positions[:, 0] = -t * movement_speed
+        positions[:, 1] = arc_height * np.sin(t * np.pi)  # Arc shape
+        positions[:, 2] = t * movement_speed * 0.5
+        look_at_points[:, 2] = positions[:, 2] + 1
+        
+    elif type == "arc_right":
+        positions[:, 0] = t * movement_speed
+        positions[:, 1] = arc_height * np.sin(t * np.pi)
+        positions[:, 2] = t * movement_speed * 0.5
+        look_at_points[:, 2] = positions[:, 2] + 1
+        
+    elif type == "figure_eight":
+        angles = t * 4 * np.pi * rotation_speed
+        positions[:, 0] = movement_speed * np.sin(angles)
+        positions[:, 2] = movement_speed * np.sin(angles * 2) * 0.5 + 2.0
+        positions[:, 1] = movement_speed * np.cos(angles * 2) * 0.3
+        look_at_points[:, :] = [0, 0, 0]
+        
+    elif type == "sine_wave":
+        # Sinusoidal path
+        positions[:, 0] = movement_speed * np.sin(t * 2 * np.pi * rotation_speed)
+        positions[:, 2] = t * movement_speed
+        positions[:, 1] = arc_height * np.sin(t * 4 * np.pi)
+        look_at_points[:, 2] = positions[:, 2] + 1
+        
+    elif type == "custom" and custom_params:
+        # Custom trajectory from parameters
+        if "positions" in custom_params:
+            positions = np.array(custom_params["positions"])
+        if "look_at_points" in custom_params:
+            look_at_points = np.array(custom_params["look_at_points"])
+        if "up_vectors" in custom_params:
+            up_vectors = np.array(custom_params["up_vectors"])
+    
+    else:
+        # Default fallback
+        positions[:, 2] = t * movement_speed
+        look_at_points[:, 2] = positions[:, 2] + 1
+    
+    # Convert to extrinsic matrices
+    extrinsics = []
+    for i in range(num_frames):
+        pos = positions[i]
+        target = look_at_points[i]
+        up = up_vectors[i]
+
+        # Compute camera coordinate system
+        z = target - pos  # Forward direction
+        z = z / (np.linalg.norm(z) + 1e-8)
+
+        x = np.cross(up, z)  # Right direction
+        x = x / (np.linalg.norm(x) + 1e-8)
+
+        y = np.cross(z, x)  # Up direction
+        y = y / (np.linalg.norm(y) + 1e-8)
+
+        # Build rotation matrix and extrinsic matrix
         R = np.stack([x, y, z], axis=0)
         w2c = np.eye(4)
         w2c[:3, :3] = R
-        w2c[:3, 3] = -R @ t
-        extrinsics.append(w2c)
-    extrinsics = np.stack(extrinsics)
+        w2c[:3, 3] = -R @ pos
 
+        extrinsics.append(w2c)
+
+    extrinsics = np.stack(extrinsics)
     return intrinsics, extrinsics
+
+# Helper function to create smooth interpolated trajectories
+def create_custom_trajectory(keyframes, num_frames, interpolation="cubic"):
+    """
+    Create custom trajectory from keyframes.
+    
+    Args:
+        keyframes: List of (frame_index, position, look_at, up) tuples
+        num_frames: Total number of frames
+        interpolation: "linear", "cubic", or "bezier"
+    
+    Returns:
+        positions, look_at_points, up_vectors arrays
+    """
+    from scipy.interpolate import interp1d
+    
+    # Extract keyframe data
+    kf_indices = [kf[0] for kf in keyframes]
+    kf_positions = np.array([kf[1] for kf in keyframes])
+    kf_look_ats = np.array([kf[2] for kf in keyframes])
+    kf_ups = np.array([kf[3] for kf in keyframes])
+    
+    # Create interpolation functions
+    frame_indices = np.linspace(0, num_frames-1, num_frames)
+    
+    if interpolation == "cubic":
+        kind = "cubic"
+    elif interpolation == "linear":
+        kind = "linear"
+    else:
+        kind = "linear"  # fallback
+    
+    # Interpolate each component
+    pos_interp = interp1d(kf_indices, kf_positions, axis=0, kind=kind, 
+                         bounds_error=False, fill_value="extrapolate")
+    look_interp = interp1d(kf_indices, kf_look_ats, axis=0, kind=kind,
+                          bounds_error=False, fill_value="extrapolate")
+    up_interp = interp1d(kf_indices, kf_ups, axis=0, kind=kind,
+                        bounds_error=False, fill_value="extrapolate")
+    
+    positions = pos_interp(frame_indices)
+    look_at_points = look_interp(frame_indices)
+    up_vectors = up_interp(frame_indices)
+    
+    return positions, look_at_points, up_vectors
 
 
 # from VGGT: https://github.com/facebookresearch/vggt/blob/main/vggt/utils/geometry.py
@@ -308,21 +552,22 @@ def create_video_input(
 
         # Sky part is the region where depth_max is, also included in mask
         mask = mask > 0
-        # depth_max = np.max(depth)
-        # non_sky_mask = (depth != depth_max)
-        # mask = mask & non_sky_mask
+        
+        # CRITICAL: Convert to inverse depth BEFORE normalization
+        # This is what was happening in the original .exr pipeline
         depth[mask] = 1 / (depth[mask] + 1e-6)
         depth_values = depth[mask]
         
-        min_percentile = np.percentile(depth_values, 2)
-        max_percentile = np.percentile(depth_values, 98)
-        value_list.append((min_percentile, max_percentile))
+        # Compute the percentile ranges for THIS specific video sequence
+        min_percentile_val = np.percentile(depth_values, min_percentile)
+        max_percentile_val = np.percentile(depth_values, max_percentile)
+        value_list.append([min_percentile_val, max_percentile_val])
 
-        depth[mask] = (depth[mask] - min_percentile) / (max_percentile - min_percentile)
+        # Normalize using the computed ranges
+        depth[mask] = (depth[mask] - min_percentile_val) / (max_percentile_val - min_percentile_val)
         depth[~mask] = depth[mask].min()
-        
 
-        # resize to 512x512
+        # resize to target dimensions
         render = cv2.resize(render, (Width, Height), interpolation=cv2.INTER_LINEAR)
         mask = cv2.resize((mask.astype(np.float32) * 255).astype(np.uint8), \
             (Width, Height), interpolation=cv2.INTER_NEAREST)
@@ -335,8 +580,8 @@ def create_video_input(
         if separate:
             render_path = os.path.join(video_input_dir, f"render_{i:04d}.png")
             imageio.imwrite(render_path, render)
-            depth_path = os.path.join(video_input_dir, f"depth_{i:04d}.exr")
-            pyexr.write(depth_path, depth)  
+            depth_path = os.path.join(video_input_dir, f"depth_{i:04d}.npy")
+            np.save(depth_path, depth)
         else:
             render = np.concatenate([render, depth], axis=-3)
             render_path = os.path.join(video_input_dir, f"render_{i:04d}.png")
@@ -346,13 +591,14 @@ def create_video_input(
             if separate:
                 ref_image_path = os.path.join(video_output_dir, f"ref_image.png")
                 imageio.imwrite(ref_image_path, ref_image)
-                ref_depth_path = os.path.join(video_output_dir, f"ref_depth.exr")
-                pyexr.write(ref_depth_path, depth) 
+                ref_depth_path = os.path.join(video_output_dir, f"ref_depth.npy")
+                np.save(ref_depth_path, depth)
             else:
                 ref_image = np.concatenate([ref_image, depth], axis=-3)
                 ref_image_path = os.path.join(video_output_dir, f"ref_image.png")
                 imageio.imwrite(ref_image_path, ref_image)
 
+    # CRITICAL: Save the depth ranges for the inference pipeline to use
     with open(os.path.join(video_output_dir, f"depth_range.json"), "w") as f:
         json.dump(value_list, f)
 
