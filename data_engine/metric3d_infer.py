@@ -6,7 +6,8 @@ import itertools
 import json
 from pathlib import Path
 from typing import *
-import pyexr
+import numpy as np
+
 
 def main(image_dir, intrinsic_path, output_dir):    
     os.makedirs(output_dir, exist_ok=True)
@@ -32,9 +33,9 @@ def main(image_dir, intrinsic_path, output_dir):
     if len(image_paths) != len(intrinsic_list):
         raise ValueError(f"Number of images ({len(image_paths)}) does not match JSON frames ({len(intrinsic_list)})")
 
-    # Check existing EXR files in output directory
-    output_exr_files = list(Path(output_dir).glob('*.exr'))
-    if len(output_exr_files) >= len(image_paths):
+    # Check existing NPY files in output directory
+    output_npy_files = list(Path(output_dir).glob('*.npy'))
+    if len(output_npy_files) >= len(image_paths):
         return
 
     for idx, image_path in enumerate(image_paths):
@@ -98,13 +99,13 @@ def main(image_dir, intrinsic_path, output_dir):
 
         depth = pred_depth.cpu().numpy()
 
-        exr_output_dir = Path(output_dir)
-        exr_output_dir.mkdir(exist_ok=True, parents=True)
+        npy_output_dir = Path(output_dir)
+        npy_output_dir.mkdir(exist_ok=True, parents=True)
 
         # Construct filename (use image_path stem directly)
-        filename = f"{image_path.stem}.exr"
-        save_file = exr_output_dir.joinpath(filename)  
-        pyexr.write(save_file, depth[..., None], channel_names=["Y"])
+        filename = f"{image_path.stem}.npy"
+        save_file = npy_output_dir.joinpath(filename)  
+        np.save(save_file, depth[..., 0])
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run metric3d data engine.")
