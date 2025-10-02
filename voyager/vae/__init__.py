@@ -26,6 +26,11 @@ def load_vae(vae_type: str = "884-16c-hy",
     # Use default path mapping if no specific path is provided
     if vae_path is None:
         vae_path = VAE_PATH[vae_type]
+    # Always use provided vae_path if it exists and is valid
+    elif vae_path and os.path.exists(vae_path):
+        pass  # Use the provided path
+    else:
+        vae_path = VAE_PATH[vae_type]
 
     # Log the loading process if logger is available
     if logger is not None:
