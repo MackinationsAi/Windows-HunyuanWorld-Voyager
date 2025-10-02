@@ -19,7 +19,8 @@ HunyuanWorld-Voyager
 To download the HunyuanWorld-Voyager model, first install the huggingface-cli. (Detailed instructions are available [here](https://huggingface.co/docs/huggingface_hub/guides/cli).)
 
 ```shell
-python -m pip install "huggingface_hub[cli]"
+venv\scripts\activate
+pip install "huggingface_hub[cli]"
 ```
 
 Then download the model using the following commands:
