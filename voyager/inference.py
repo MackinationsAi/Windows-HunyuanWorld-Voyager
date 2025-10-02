@@ -29,7 +29,6 @@ from PIL import Image
 import numpy as np
 from safetensors.torch import load_file
 import cv2
-import pyexr
 import torchvision.transforms as T
 
 try:
@@ -718,19 +717,61 @@ class HunyuanVideoSampler(Inference):
             ref_depth = self.load_image(path[1], image_size)
             return torch.cat([ref_rgb, torch.ones_like(ref_rgb)[..., :16, :], ref_depth], dim=1)
 
-        if path.endswith('.exr'):
-            depth = torch.from_numpy(cv2.resize(pyexr.read(path).squeeze(
-            ), (image_size[1], image_size[0]), interpolation=cv2.INTER_LINEAR)).float()
-            image = depth.unsqueeze(0).repeat(3, 1, 1)
-            image = T.Normalize(mean=[0.5, 0.5, 0.5], std=[
-                                0.5, 0.5, 0.5], inplace=True)(image)
+        # Handle .npy files (depth data)
+        if path.endswith('.npy'):
+            depth_data = np.load(path)
+            
+            # Load the corresponding depth_range.json to get proper normalization
+            # The structure is: input_path/video_input/depth_XXXX.npy and input_path/depth_range.json
+            depth_dir = os.path.dirname(path)  # This is video_input directory
+            condition_dir = os.path.dirname(depth_dir)  # This is the condition directory
+            range_file = os.path.join(condition_dir, 'depth_range.json')
+            
+            if os.path.exists(range_file):
+                import json
+                with open(range_file, 'r') as f:
+                    depth_ranges = json.load(f)
+                
+                # Extract frame number from filename (format: "depth_XXXX.npy")
+                filename = os.path.basename(path)
+                if filename.startswith('depth_') and filename.endswith('.npy'):
+                    frame_num = int(filename[6:10])  # Extract XXXX from depth_XXXX.npy
+                    if frame_num < len(depth_ranges):
+                        min_val, max_val = depth_ranges[frame_num]
+                        print(f"Using depth range for frame {frame_num}: [{min_val:.6f}, {max_val:.6f}]")
+                    else:
+                        print(f"Frame {frame_num} not found in depth_range.json, using defaults")
+                        min_val, max_val = 0.004, 12.0
+                else:
+                    print(f"Cannot parse frame number from {filename}, using defaults")
+                    min_val, max_val = 0.004, 12.0
+            else:
+                print(f"No depth_range.json found at {range_file}, using default ranges")
+                min_val, max_val = 0.004, 12.0
+            
+            # The depth data should already be normalized to [0,1] from condition generation
+            # Just need to clean it up and apply safety checks
+            depth_data = np.nan_to_num(depth_data, nan=0.5, posinf=1.0, neginf=0.0)
+            depth_data = np.clip(depth_data, 0.0, 1.0)
+            
+            # Resize depth data to target size
+            depth_resized = cv2.resize(depth_data, (image_size[1], image_size[0]), interpolation=cv2.INTER_LINEAR)
+            depth_tensor = torch.from_numpy(depth_resized).float()
+            
+            # Convert single channel depth to 3-channel
+            image = depth_tensor.unsqueeze(0).repeat(3, 1, 1)
+            
+            # Convert from [0,1] to [-1,1] range for the pipeline
+            image = image * 2.0 - 1.0
+            
+            return image
+        
+        # Handle regular image files (PNG, JPG, etc.)
         else:
-            pil_img = Image.open(path) if isinstance(
-                path, str) else Image.fromarray(path)
+            pil_img = Image.open(path) if isinstance(path, str) else Image.fromarray(path)
             pil_img = pil_img.resize((image_size[1], image_size[0]))
             image = self.process(pil_img)
-
-        return image
+            return image
 
     @torch.no_grad()
     def predict(
@@ -840,30 +881,37 @@ class HunyuanVideoSampler(Inference):
         self.pipeline.scheduler = scheduler
 
         # Set the target image size for processing reference images and partial conditions
-        # This size should match the model's expected input dimensions
         closest_size = (height, width)
         
-        # Load and preprocess reference images for the video generation
-        # Convert image paths to pixel values and stack them into a batch
-        ref_images_pixel_values = [self.load_image(
-            image_path, image_size=closest_size) for image_path in ref_images]
-        ref_images_pixel_values = torch.cat(
-            ref_images_pixel_values).unsqueeze(0).unsqueeze(2).to(self.device)
-        
-        # Convert pixel values back to PIL Image format for visualization/debugging
-        # Normalize from [-1, 1] range to [0, 255] range and save as PNG
-        ref_images = [Image.fromarray(((torch.clamp(ref_images_pixel_values[0, :, 0].permute(
-            1, 2, 0), min=-1, max=1).cpu().numpy() + 1) * 0.5 * 255).astype(np.uint8))]
+        # For i2v mode, we need to handle the reference image specially
+        if i2v_mode and ref_images:
+            # Load reference images but don't process them through load_image yet
+            # Let the pipeline handle the reference image processing
+            ref_image_path = ref_images[0][0]  # Get the RGB image path
+            ref_images_for_pipeline = [Image.open(ref_image_path)]
+            
+            # Load and preprocess reference images for latent processing
+            ref_images_pixel_values = [self.load_image(
+                image_path, image_size=closest_size) for image_path in ref_images]
+            ref_images_pixel_values = torch.cat(
+                ref_images_pixel_values).unsqueeze(0).unsqueeze(2).to(self.device)
+        else:
+            # Original processing for non-i2v mode
+            ref_images_pixel_values = [self.load_image(
+                image_path, image_size=closest_size) for image_path in ref_images]
+            ref_images_pixel_values = torch.cat(
+                ref_images_pixel_values).unsqueeze(0).unsqueeze(2).to(self.device)
+            
+            ref_images_for_pipeline = [Image.fromarray(((torch.clamp(ref_images_pixel_values[0, :, 0].permute(
+                1, 2, 0), min=-1, max=1).cpu().numpy() + 1) * 0.5 * 255).astype(np.uint8))]
 
         # Load partial condition images (frames that will guide the video generation)
-        # These images provide temporal guidance for the video sequence
         partial_cond = [self.load_image(
             image_path, image_size=closest_size) for image_path in partial_cond]
         partial_cond = torch.stack(
             partial_cond, dim=1).unsqueeze(0).to(self.device)
         
         # Load partial mask images (indicate which regions should be preserved/modified)
-        # Masks control which parts of the video should be generated vs. kept from conditions
         partial_mask = [self.load_image(
             image_path, image_size=closest_size) for image_path in partial_mask]
         partial_mask = torch.stack(
@@ -875,29 +923,24 @@ class HunyuanVideoSampler(Inference):
             self.pipeline.vae.enable_tiling()
 
             # Encode reference images to latent space representation
-            # This creates a compressed representation that guides the video generation
             ref_latents = self.pipeline.vae.encode(
                 ref_images_pixel_values).latent_dist.sample()  # B, C, F, H, W
             ref_latents.mul_(self.pipeline.vae.config.scaling_factor)
 
             # Encode partial condition images to latent space
-            # These latents provide temporal guidance for the video sequence
             partial_cond = self.pipeline.vae.encode(
                 partial_cond).latent_dist.sample()
             partial_cond.mul_(self.pipeline.vae.config.scaling_factor)
 
             # Process mask frames for controlling video generation
-            # Invert the mask so that 1 indicates regions to be generated
             mask_frames = 1 - partial_mask
             first_mask = mask_frames[:, :, 0:1]  # Extract the first mask frame
             
             # Prepend 3 copies of the first mask to create temporal consistency
-            # This ensures the initial frames have consistent masking
             mask_frames = torch.cat(
                 [first_mask, first_mask, first_mask, mask_frames], dim=2)
             
             # Apply 3D max pooling to downsample masks to match latent space dimensions
-            # Reduces temporal dimension by 4, spatial dimensions by 8
             mask_frames = torch.nn.functional.max_pool3d(
                 mask_frames,  # Input: [1, C, F, H, W]
                 kernel_size=(4, 8, 8),  # Reduce F by 4, H and W by 8
@@ -908,46 +951,17 @@ class HunyuanVideoSampler(Inference):
             mask_frames = 1 - mask_frames
             partial_mask = mask_frames[:, 0:1]
 
-            # # Load camera parameters (Plücker coordinates) for 3D scene understanding
-            # # These parameters define the camera poses for each frame
-            # plucker_features = load_init_camera_params(
-            #     camera_path, closest_size[0], closest_size[1])
-            # plucker_features = plucker_features.transpose(0, 1).to(self.device)
-            
-            # # Extract the first camera parameter and repeat it 3 times
-            # # This ensures consistent camera parameters for the initial frames
-            # first_plucker_feature = plucker_features[:, 0:1]
-            # plucker_features = torch.cat(
-            #     [first_plucker_feature, first_plucker_feature, first_plucker_feature, plucker_features], dim=1)
-            
-            # # Apply 3D average pooling to downsample camera parameters
-            # # Reduces temporal dimension by 4 while preserving spatial information
-            # plucker_features = torch.nn.functional.avg_pool3d(
-            #     plucker_features.unsqueeze(0),
-            #     kernel_size=(4, 1, 1),
-            #     stride=(4, 1, 1)
-            # )
-            
-            # # Pad camera parameters with ones to match expected dimensions
-            # # This ensures the feature tensor has the correct shape for processing
-            # plucker_features = torch.cat([plucker_features,
-            #     torch.ones(1, 6, plucker_features.shape[2], 2, plucker_features.shape[-1]).to(self.device),
-            #     plucker_features], dim=-2)
-
         # Generate rotary position embeddings for the target video dimensions
-        # These embeddings provide positional information to the transformer model
         freqs_cos, freqs_sin = self.get_rotary_pos_embed(
             target_video_length, target_height, target_width
         )
         
         # Generate rotary position embeddings for conditional frames
-        # Adjusted dimensions account for the conditional frame structure
         freqs_cos_cond, freqs_sin_cond = self.get_rotary_pos_embed(
             target_video_length, (target_height - 16) // 2, target_width
         )
         
         # Calculate the total number of tokens for the transformer model
-        # This determines the sequence length for attention mechanisms
         n_tokens = freqs_cos.shape[0]
 
         debug_str = f"""
@@ -994,7 +1008,7 @@ class HunyuanVideoSampler(Inference):
             i2v_condition_type=i2v_condition_type,
             i2v_stability=i2v_stability,
             img_latents=ref_latents,
-            semantic_images=ref_images,
+            semantic_images=ref_images_for_pipeline,
             partial_cond=partial_cond,
             partial_mask=partial_mask
         )[0]
