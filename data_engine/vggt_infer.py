@@ -218,14 +218,13 @@ def main(image_dir, output_dir):
         intrinsic[0, :] = intrinsic[0, :] * s_width
         intrinsic[1, :] = intrinsic[1, :] * s_height
         
-        # Save depth map as EXR file
-        cv2.imwrite(os.path.join(output_dir, 'depth', f"frame_{(i+1):05d}.exr"), depth, \
-            [cv2.IMWRITE_EXR_TYPE, cv2.IMWRITE_EXR_TYPE_FLOAT])
+        # Save depth map as NPY file
+        np.save(os.path.join(output_dir, 'depth', f"frame_{(i+1):05d}.npy"), depth)
         
         # Store metadata for this frame
         save_dict[f"{(i+1):03d}"] = {
             'image_path': image_name,
-            'depth_path': os.path.join(output_dir, 'depth', f"frame_{(i+1):05d}.exr"),
+            'depth_path': os.path.join(output_dir, 'depth', f"frame_{(i+1):05d}.npy"),
             'intrinsic': intrinsic.tolist(),
             'w2c': w2c.tolist()
         }
