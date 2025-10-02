@@ -4,7 +4,6 @@ import numpy as np
 import cv2
 import torch
 import imageio
-import pyexr
 import trimesh
 from PIL import Image  
 
@@ -101,8 +100,8 @@ class DepthAlignMetric:
         
         for vggt_file, moge_file, input_rgb_file in zip(vggt_files, moge_files, input_rgb_files):
             # 读取深度数据           
-            depth_moge = pyexr.read(os.path.join(self.moge_depth_dir, moge_file)).squeeze()
-            depth_vggt = pyexr.read(os.path.join(self.vggt_depth_dir, vggt_file)).squeeze()
+            depth_moge = np.load(os.path.join(self.moge_depth_dir, moge_file))
+            depth_vggt = np.load(os.path.join(self.vggt_depth_dir, vggt_file))
             depth_vggt = cv2.resize(depth_vggt,  dsize=(depth_moge.shape[1], depth_moge.shape[0]), \
                 interpolation=cv2.INTER_LINEAR)
 
@@ -124,7 +123,7 @@ class DepthAlignMetric:
                 ~sky_mask                 # 非天空区域
             )
                         
-            # depth_moge 无效部分 设置为 有效部分最大值的1.5倍   避免final_align_depth出现负数
+            # depth_moge 无效部分 设置为 有效部分最大值的1.5倍  避免final_align_depth出现负数
             depth_moge[~valid_masks] = depth_moge[valid_masks].max() * 1
                                                         
             source_inv_depth = 1.0 / depth_moge
@@ -178,8 +177,8 @@ class DepthAlignMetric:
 
 
     def scale_moge_depth(self):
-        vggt_files = sorted(f for f in os.listdir(self.vggt_depth_dir) if f.endswith('.exr'))
-        moge_files = sorted(f for f in os.listdir(self.moge_depth_dir) if f.endswith('.exr'))
+        vggt_files = sorted(f for f in os.listdir(self.vggt_depth_dir) if f.endswith('.npy'))
+        moge_files = sorted(f for f in os.listdir(self.moge_depth_dir) if f.endswith('.npy'))
         input_rgb_files = sorted(f for f in os.listdir(self.input_rgb_dir) if f.endswith('.png'))
         
         if len(vggt_files) != len(moge_files):
@@ -225,13 +224,13 @@ class DepthAlignMetric:
 
     def align_metric_depth(self, moge_align_depth_list, valid_mask_list):
         # 获取metric文件列表
-        metric_files = sorted(f for f in os.listdir(self.metric3d_depth_dir) if f.endswith('.exr'))
+        metric_files = sorted(f for f in os.listdir(self.metric3d_depth_dir) if f.endswith('.npy'))
         
         metric_scales_list = []
         # 遍历所有深度图对
         for idx, (metric_file, moge_depth) in enumerate(zip(metric_files, moge_align_depth_list)):
             
-            depth_metric3d = pyexr.read(os.path.join(self.metric3d_depth_dir, metric_file)).squeeze()
+            depth_metric3d = np.load(os.path.join(self.metric3d_depth_dir, metric_file))
             depth_metric3d = torch.from_numpy(depth_metric3d).float().to(self.device)
             
             # 获取对应帧的掩码
@@ -257,9 +256,9 @@ class DepthAlignMetric:
             # 保存深度文件
             output_path = os.path.join(
                 self.output_metric_depth_dir,
-                f"{os.path.splitext(metric_file)[0]}_metric.exr"
+                f"{os.path.splitext(metric_file)[0]}_metric.npy"
             )
-            pyexr.write(output_path, metric_moge_depth, channel_names=["Y"])
+            np.save(output_path, metric_moge_depth)
 
         # 阶段3：更新相机参数
         with open(self.vggt_camera_json_file, 'r') as f:
@@ -298,14 +297,13 @@ class DepthAlignMetric:
         )
     
     
-    
     def depth_to_pointmap(self):
         
         num_frames = len(self.metric_w2c)
         for frame_index in range(num_frames):
             
-            exr_path = os.path.join(self.output_metric_depth_dir, f"frame_{frame_index+1:05d}_metric.exr")
-            depth_data = pyexr.read(exr_path).squeeze()
+            npy_path = os.path.join(self.output_metric_depth_dir, f"frame_{frame_index+1:05d}_metric.npy")
+            depth_data = np.load(npy_path)
             depth_tensor = torch.from_numpy(depth_data).to(self.device, torch.float32)
 
             
@@ -415,4 +413,4 @@ if __name__ == "__main__":
     depth_align_processor.align_depth_scale()
     depth_align_processor.load_metirc_camera_parameters()
     depth_align_processor.depth_to_pointmap()  
-    depth_align_processor.render_from_cameras() 
+    depth_align_processor.render_from_cameras()
