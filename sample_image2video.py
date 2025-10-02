@@ -4,13 +4,16 @@ from pathlib import Path
 from loguru import logger
 from datetime import datetime
 
-from voyager.utils.file_utils import save_videos_grid
+from voyager.utils.file_utils import save_videos_grid, save_video_only
 from voyager.config import parse_args
 from voyager.inference import HunyuanVideoSampler
 
-
 def main():
     args = parse_args()
+    
+    # Set model_base to use local ckpts folder
+    args.model_base = os.path.abspath("ckpts")
+    
     print(args)
     models_root_path = Path(args.model_base)
     if not models_root_path.exists():
@@ -51,9 +54,9 @@ def main():
         ulysses_degree=args.ulysses_degree,
         ring_degree=args.ring_degree,
         ref_images=[(os.path.join(args.input_path, "ref_image.png"),
-                     os.path.join(args.input_path, "ref_depth.exr"))],
+                     os.path.join(args.input_path, "ref_depth.npy"))],
         partial_cond=[(os.path.join(args.input_path, "video_input", f"render_{j:04d}.png"), os.path.join(
-            args.input_path, "video_input", f"depth_{j:04d}.exr")) for j in range(49)],
+            args.input_path, "video_input", f"depth_{j:04d}.npy")) for j in range(49)],
         partial_mask=[(os.path.join(args.input_path, "video_input", f"mask_{j:04d}.png"), os.path.join(
             args.input_path, "video_input", f"mask_{j:04d}.png")) for j in range(49)]
     )
@@ -64,13 +67,19 @@ def main():
     if 'LOCAL_RANK' not in os.environ or int(os.environ['LOCAL_RANK']) == 0:
         for i, sample in enumerate(samples):
             sample = samples[i].unsqueeze(0)
-            time_flag = datetime.fromtimestamp(
-                time.time()).strftime("%Y-%m-%d-%H:%M:%S")
-            cur_save_path = \
-                f"{save_path}/{time_flag}_seed{outputs['seeds'][i]}_{outputs['prompts'][i][:100].replace('/', '')}.mp4"
+            time_flag = datetime.fromtimestamp(time.time()).strftime("%Y-%m-%d-%H_%M_%S")
+            
+            # Clean prompt for Windows filename
+            clean_prompt = outputs['prompts'][i][:100]
+            for char in ['/', '\\', ':', '*', '?', '"', '<', '>', '|']:
+                clean_prompt = clean_prompt.replace(char, '')
+            
+            cur_save_path = f"{save_path}{os.sep}{time_flag}_seed{outputs['seeds'][i]}_{clean_prompt}.mp4"
             save_videos_grid(sample, cur_save_path, fps=24)
             logger.info(f'Sample save to: {cur_save_path}')
 
+            clean_save_path = f"{save_path}{os.sep}{time_flag}_seed{outputs['seeds'][i]}_{clean_prompt}_clean.mp4"
+            save_video_only(sample, clean_save_path, fps=24)
 
 if __name__ == "__main__":
     main()
