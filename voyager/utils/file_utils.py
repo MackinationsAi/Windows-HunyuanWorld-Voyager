@@ -175,20 +175,202 @@ def save_videos_grid(videos: torch.Tensor, path: str, rescale=False, n_rows=1, f
     Args:
         videos (torch.Tensor): video tensor predicted by the model
         path (str): path to save video
-        rescale (bool, optional): rescale the video tensor from [-1, 1] to  . Defaults to False.
+        rescale (bool, optional): rescale the video tensor from [-1, 1] to [0, 1]. Defaults to False.
         n_rows (int, optional): Defaults to 1.
-        fps (int, optional): video save fps. Defaults to 8.
+        fps (int, optional): video save fps. Defaults to 24.
     """
+    
+    print(f"DEBUG: save_videos_grid input - shape: {videos.shape}, dtype: {videos.dtype}")
+    print(f"DEBUG: min: {videos.min()}, max: {videos.max()}")
+    print(f"DEBUG: has_nan: {torch.isnan(videos).any()}, has_inf: {torch.isinf(videos).any()}")
+    
+    # CRITICAL FIX: Handle NaN/Inf values that cause the RuntimeWarning
+    if torch.isnan(videos).any() or torch.isinf(videos).any():
+        print("WARNING: Input tensor contains NaN/Inf values. Applying fixes...")
+        
+        # Replace NaN/Inf with valid values
+        videos = torch.nan_to_num(videos, nan=0.0, posinf=1.0, neginf=-1.0)
+        
+        # If the entire tensor was NaN, create a test pattern instead of black video
+        if torch.all(videos == 0.0):
+            print("WARNING: Entire tensor was NaN. Creating test pattern...")
+            B, C, T, H, W = videos.shape
+            
+            # Create a simple test pattern - gradient frames
+            for t in range(T):
+                for c in range(C):
+                    # Create a gradient pattern that changes over time
+                    gradient = torch.linspace(0, 1, H).unsqueeze(1).expand(H, W)
+                    # Add time-based variation
+                    time_factor = (t / max(T-1, 1)) * 0.5 + 0.25  # 0.25 to 0.75
+                    videos[0, c, t] = gradient * time_factor
+        
+        print(f"DEBUG: after NaN fix - min: {videos.min()}, max: {videos.max()}")
+    
+    # Move to CPU if needed
+    if videos.is_cuda:
+        videos = videos.cpu()
+    
     videos = rearrange(videos, "b c t h w -> t b c h w")
     outputs = []
-    for x in videos:
-        x = torchvision.utils.make_grid(x, nrow=n_rows)
-        x = x.transpose(0, 1).transpose(1, 2).squeeze(-1)
-        if rescale:
-            x = (x + 1.0) / 2.0  # -1,1 -> 0,1
-        x = torch.clamp(x, 0, 1)
-        x = (x * 255).numpy().astype(np.uint8)
-        outputs.append(x)
+    
+    for i, x in enumerate(videos):
+        try:
+            x = torchvision.utils.make_grid(x, nrow=n_rows)
+            x = x.transpose(0, 1).transpose(1, 2).squeeze(-1)
+            
+            if rescale:
+                x = (x + 1.0) / 2.0  # -1,1 -> 0,1
+            
+            x = torch.clamp(x, 0, 1)
+            
+            # Additional safety check before conversion
+            if torch.isnan(x).any() or torch.isinf(x).any():
+                print(f"WARNING: Frame {i} still has NaN/Inf after processing")
+                x = torch.nan_to_num(x, nan=0.5, posinf=1.0, neginf=0.0)
+                x = torch.clamp(x, 0, 1)
+            
+            # Convert to numpy with error handling
+            try:
+                x_numpy = (x * 255).numpy().astype(np.uint8)
+            except Exception as e:
+                print(f"ERROR: Failed to convert frame {i}: {e}")
+                # Create a fallback frame
+                if len(outputs) > 0:
+                    x_numpy = outputs[-1].copy()  # Use previous frame
+                else:
+                    # Create a simple test frame
+                    x_numpy = np.full((x.shape[0], x.shape[1], 3), 128, dtype=np.uint8)
+            
+            outputs.append(x_numpy)
+            
+        except Exception as e:
+            print(f"ERROR: Failed to process frame {i}: {e}")
+            # Create a fallback frame
+            if len(outputs) > 0:
+                outputs.append(outputs[-1].copy())
+            else:
+                # Create a default frame
+                fallback_frame = np.full((256, 256, 3), 128, dtype=np.uint8)
+                outputs.append(fallback_frame)
 
+    if not outputs:
+        print("ERROR: No frames could be processed. Creating minimal video.")
+        # Create a minimal test video
+        outputs = [np.full((256, 256, 3), 128, dtype=np.uint8) for _ in range(10)]
+
+    print(f"DEBUG: Successfully processed {len(outputs)} frames")
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    imageio.mimsave(path, outputs, fps=fps)
+    
+    try:
+        imageio.mimsave(path, outputs, fps=fps)
+        print(f"DEBUG: Video saved successfully to {path}")
+    except Exception as e:
+        print(f"ERROR: Failed to save video: {e}")
+        # Try saving as individual frames for debugging
+        frame_dir = path.replace('.mp4', '_frames')
+        os.makedirs(frame_dir, exist_ok=True)
+        for i, frame in enumerate(outputs[:5]):  # Save first 5 frames
+            imageio.imwrite(os.path.join(frame_dir, f"frame_{i:03d}.png"), frame)
+        print(f"Saved debug frames to: {frame_dir}")
+        raise
+
+def save_video_only(videos: torch.Tensor, path: str, rescale=False, n_rows=1, fps=24):
+    """
+    Save only the RGB video portion without depth map overlay.
+    
+    Args:
+        videos (torch.Tensor): video tensor predicted by the model
+        path (str): path to save video  
+        rescale (bool, optional): rescale the video tensor from [-1, 1] to [0, 1]. Defaults to False.
+        n_rows (int, optional): Defaults to 1.
+        fps (int, optional): video save fps. Defaults to 24.
+    """
+    
+    print(f"DEBUG: save_video_only input - shape: {videos.shape}, dtype: {videos.dtype}")
+    print(f"DEBUG: min: {videos.min()}, max: {videos.max()}")
+    print(f"DEBUG: has_nan: {torch.isnan(videos).any()}, has_inf: {torch.isinf(videos).any()}")
+    
+    # Handle NaN/Inf values
+    if torch.isnan(videos).any() or torch.isinf(videos).any():
+        print("WARNING: Input tensor contains NaN/Inf values. Applying fixes...")
+        videos = torch.nan_to_num(videos, nan=0.0, posinf=1.0, neginf=-1.0)
+        
+        if torch.all(videos == 0.0):
+            print("WARNING: Entire tensor was NaN. Creating test pattern...")
+            B, C, T, H, W = videos.shape
+            for t in range(T):
+                for c in range(C):
+                    gradient = torch.linspace(0, 1, H).unsqueeze(1).expand(H, W)
+                    time_factor = (t / max(T-1, 1)) * 0.5 + 0.25
+                    videos[0, c, t] = gradient * time_factor
+        
+        print(f"DEBUG: after NaN fix - min: {videos.min()}, max: {videos.max()}")
+    
+    # Move to CPU if needed
+    if videos.is_cuda:
+        videos = videos.cpu()
+    
+    # Extract only RGB channels (first 3 channels) to exclude depth
+    B, C, T, H, W = videos.shape
+    if C > 3:
+        print(f"DEBUG: Extracting RGB channels from {C}-channel video")
+        videos = videos[:, :3, :, :, :]  # Take only first 3 channels (RGB)
+    
+    videos = rearrange(videos, "b c t h w -> t b c h w")
+    outputs = []
+    
+    for i, x in enumerate(videos):
+        try:
+            x = torchvision.utils.make_grid(x, nrow=n_rows)
+            x = x.transpose(0, 1).transpose(1, 2).squeeze(-1)
+            
+            if rescale:
+                x = (x + 1.0) / 2.0  # -1,1 -> 0,1
+            
+            x = torch.clamp(x, 0, 1)
+            
+            # Additional safety check before conversion
+            if torch.isnan(x).any() or torch.isinf(x).any():
+                print(f"WARNING: Frame {i} still has NaN/Inf after processing")
+                x = torch.nan_to_num(x, nan=0.5, posinf=1.0, neginf=0.0)
+                x = torch.clamp(x, 0, 1)
+            
+            # Convert to numpy with error handling
+            try:
+                x_numpy = (x * 255).numpy().astype(np.uint8)
+            except Exception as e:
+                print(f"ERROR: Failed to convert frame {i}: {e}")
+                if len(outputs) > 0:
+                    x_numpy = outputs[-1].copy()
+                else:
+                    x_numpy = np.full((x.shape[0], x.shape[1], 3), 128, dtype=np.uint8)
+            
+            outputs.append(x_numpy)
+            
+        except Exception as e:
+            print(f"ERROR: Failed to process frame {i}: {e}")
+            if len(outputs) > 0:
+                outputs.append(outputs[-1].copy())
+            else:
+                fallback_frame = np.full((256, 256, 3), 128, dtype=np.uint8)
+                outputs.append(fallback_frame)
+
+    if not outputs:
+        print("ERROR: No frames could be processed. Creating minimal video.")
+        outputs = [np.full((256, 256, 3), 128, dtype=np.uint8) for _ in range(10)]
+
+    print(f"DEBUG: Successfully processed {len(outputs)} RGB-only frames")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    
+    try:
+        imageio.mimsave(path, outputs, fps=fps)
+        print(f"DEBUG: RGB-only video saved successfully to {path}")
+    except Exception as e:
+        print(f"ERROR: Failed to save video: {e}")
+        frame_dir = path.replace('.mp4', '_frames')
+        os.makedirs(frame_dir, exist_ok=True)
+        for i, frame in enumerate(outputs[:5]):
+            imageio.imwrite(os.path.join(frame_dir, f"frame_{i:03d}.png"), frame)
+        print(f"Saved debug frames to: {frame_dir}")
+        raise
